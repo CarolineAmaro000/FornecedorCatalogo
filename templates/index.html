@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<title>Conversor de Catálogo PDF → Comparação de Planilha</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d29;
+    --accent: #3aa0ff;
+    --text: #e6e6e6;
+    --muted: #9aa0ac;
+    --ok: #2ecc71;
+    --erro: #ff5c5c;
+  }
+  body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; margin: 0; padding: 24px; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  p.sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+  input[type=file] { color: var(--text); }
+  button {
+    background: var(--accent); color: white; border: none; border-radius: 6px;
+    padding: 10px 18px; font-size: 14px; cursor: pointer; margin-top: 10px;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid #2a2e3d; text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .erro { color: var(--erro); font-weight: 600; }
+  .aviso { color: #f5c542; }
+  .muted { color: var(--muted); }
+  .status { margin-top: 10px; font-size: 13px; color: var(--muted); }
+  .flex { display: flex; gap: 24px; flex-wrap: wrap; }
+  .flex > div { flex: 1; min-width: 260px; }
+  code { background: #000; padding: 2px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<h1>📦 Conversor de Catálogo PDF</h1>
+<p class="sub">Extrai cada produto do catálogo (código, nome, specs, PCS/CX, preço) e compara com sua planilha.</p>
+
+<div class="card">
+  <h3>1. Enviar catálogo em PDF</h3>
+  <input type="file" id="pdfInput" accept="application/pdf">
+  <br>
+  <button id="btnExtrair">Extrair produtos</button>
+  <div class="status" id="statusExtrair"></div>
+</div>
+
+<div class="card" id="cardResultadoExtracao" style="display:none;">
+  <h3>2. Produtos extraídos (<span id="totalProdutos">0</span>)</h3>
+  <p class="muted">Itens em <span class="aviso">amarelo</span> não tiveram preço ou PCS/CX identificados automaticamente — confira o texto bruto.</p>
+  <div style="max-height: 400px; overflow-y: auto;">
+    <table id="tabelaProdutos">
+      <thead>
+        <tr><th>Página</th><th>Código</th><th>Nome</th><th>PCS/CX</th><th>Preço</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card" id="cardPedido" style="display:none;">
+  <h3>3. Converter pedido (unidades → caixas)</h3>
+  <p class="muted">
+    Cole o pedido, uma linha por item. Aceita <code>SKU&lt;TAB&gt;QTD</code> ou <code>SKU - QTD</code>. Exemplo:<br>
+    <code>ACA-SEDAN-GG-P - 105</code><br>
+    Se o SKU não bater exatamente com o catálogo (hífen faltando, barra em vez de hífen, etc), o sistema tenta achar o mais parecido pelo "miolo" do código e avisa para você confirmar.
+  </p>
+  <textarea id="pedidoInput" rows="8" style="width:100%; background:#0b0d13; color:var(--text); border:1px solid #2a2e3d; border-radius:6px; padding:10px; font-family: monospace;" placeholder="ACA-SEDAN-GG-P - 105&#10;AIN-1208 - 16"></textarea>
+  <br>
+  <button id="btnConverterPedido">Converter para caixas</button>
+  <div class="status" id="statusPedido"></div>
+
+  <div id="resultadoPedidoWrap" style="display:none; margin-top: 16px;">
+    <h4>✅ Encontrados no catálogo (saída pronta para copiar)</h4>
+    <textarea id="pedidoOutput" rows="6" readonly style="width:100%; background:#0b0d13; color:var(--ok); border:1px solid #2a2e3d; border-radius:6px; padding:10px; font-family: monospace;"></textarea>
+    <button id="btnCopiarPedido">Copiar</button>
+    <button id="btnDownloadPedido">Baixar (.txt)</button>
+
+    <div id="pedidoAproximadosWrap" style="display:none; margin-top:16px;">
+      <h4 class="aviso">⚠️ Correspondência aproximada — confira antes de confirmar</h4>
+      <p class="muted">O SKU do pedido não bateu exatamente com nenhum código do catálogo, mas encontramos um parecido. A saída abaixo já está convertida, mas confirme se é o produto certo antes de usar.</p>
+      <textarea id="pedidoOutputAproximado" rows="6" readonly style="width:100%; background:#0b0d13; color:#f5c542; border:1px solid #2a2e3d; border-radius:6px; padding:10px; font-family: monospace;"></textarea>
+      <table id="tabelaAproximados" style="margin-top:8px;">
+        <thead><tr><th>SKU no pedido</th><th>Código no catálogo (match aproximado)</th><th>Produto</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div id="pedidoNaoEncontradosWrap" style="display:none; margin-top:16px;">
+      <h4 class="erro">❌ Não encontrados no catálogo</h4>
+      <p class="muted">Devolvidos exatamente como foram enviados, para você conferir manualmente.</p>
+      <textarea id="pedidoOutputNaoEncontrado" rows="5" readonly style="width:100%; background:#0b0d13; color:var(--erro); border:1px solid #2a2e3d; border-radius:6px; padding:10px; font-family: monospace;"></textarea>
+    </div>
+
+    <div id="pedidoInvalidoWrap" style="display:none; margin-top:16px;">
+      <h4 class="muted">Linhas em formato não reconhecido</h4>
+      <textarea id="pedidoOutputInvalido" rows="3" readonly style="width:100%; background:#0b0d13; color:var(--muted); border:1px solid #2a2e3d; border-radius:6px; padding:10px; font-family: monospace;"></textarea>
+    </div>
+  </div>
+</div>
+
+<div class="card" id="cardComparacao" style="display:none;">
+  <h3>4. Comparar com planilha</h3>
+  <p class="muted">
+    A planilha precisa ter uma coluna de código (aceito: <code>codigo</code>, <code>código</code>, <code>sku</code>, <code>referencia</code>).<br>
+    Opcional: coluna de <code>preco</code>/<code>preço</code>/<code>valor</code> para checar se bate, e coluna de <code>quantidade</code>/<code>qtd</code>/<code>unidades</code> para converter em caixas fechadas.
+  </p>
+  <input type="file" id="planilhaInput" accept=".xlsx,.csv">
+  <br>
+  <button id="btnComparar">Comparar</button>
+  <div class="status" id="statusComparar"></div>
+</div>
+
+<div class="card" id="cardResultadoComparacao" style="display:none;">
+  <h3>5. Resultado da comparação</h3>
+  <div style="max-height: 500px; overflow-y: auto;">
+    <table id="tabelaComparacao">
+      <thead>
+        <tr>
+          <th>Código</th><th>Nome</th>
+          <th>Preço planilha</th><th>Preço catálogo</th><th>Diferença</th>
+          <th>PCS/CX</th><th>Qtd. unidades</th><th>Caixas fechadas</th><th>Unid. restantes</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <button id="btnDownloadCsv">Baixar resultado (.csv)</button>
+</div>
+
+<div class="card" id="cardCusto" style="display:none;">
+  <h3>6. Verificar preço do catálogo x base de custo</h3>
+  <p class="muted">
+    Verifica se <code>preço do catálogo × (1 − desconto)</code> bate com o custo cadastrado na base.
+    Aceita colar o link de uma planilha Google Sheets pública ("qualquer pessoa com o link pode ver")
+    ou subir um arquivo .xlsx/.csv com colunas de código/SKU e custo.
+  </p>
+  <div class="flex">
+    <div>
+      <label class="muted">Link do Google Sheets</label><br>
+      <input type="text" id="custoSheetUrl" style="width:100%; background:#0b0d13; color:var(--text); border:1px solid #2a2e3d; border-radius:6px; padding:8px;" placeholder="https://docs.google.com/spreadsheets/d/...">
+    </div>
+    <div>
+      <label class="muted">...ou envie um arquivo</label><br>
+      <input type="file" id="custoPlanilhaInput" accept=".xlsx,.csv">
+    </div>
+  </div>
+  <div class="flex" style="margin-top:10px;">
+    <div>
+      <label class="muted">Desconto aplicado (%)</label><br>
+      <input type="number" id="custoDesconto" value="10" style="width:100px; background:#0b0d13; color:var(--text); border:1px solid #2a2e3d; border-radius:6px; padding:8px;">
+    </div>
+    <div>
+      <label class="muted">Tolerância aceitável (%)</label><br>
+      <input type="number" id="custoTolerancia" value="2" style="width:100px; background:#0b0d13; color:var(--text); border:1px solid #2a2e3d; border-radius:6px; padding:8px;">
+    </div>
+  </div>
+  <button id="btnCompararCusto">Verificar custos</button>
+  <div class="status" id="statusCusto"></div>
+</div>
+
+<div class="card" id="cardResultadoCusto" style="display:none;">
+  <h3>7. Resultado da verificação de custo</h3>
+  <p class="muted">
+    <span class="erro">Vermelho</span>: diferença acima da tolerância. <span class="muted">Cinza</span>: código não encontrado na base de custo.
+  </p>
+  <div style="max-height: 500px; overflow-y: auto;">
+    <table id="tabelaCusto">
+      <thead>
+        <tr>
+          <th>Código</th><th>Nome</th>
+          <th>Preço catálogo</th><th>Custo esperado (−10%)</th><th>Custo na planilha</th>
+          <th>Diferença</th><th>Diferença %</th><th>Bate?</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <button id="btnDownloadCustoCsv">Baixar resultado (.csv)</button>
+</div>
+
+<script>
+let produtosExtraidos = [];
+let resultadoComparacao = [];
+
+document.getElementById("btnExtrair").addEventListener("click", async () => {
+  const input = document.getElementById("pdfInput");
+  const status = document.getElementById("statusExtrair");
+  if (!input.files.length) { status.textContent = "Selecione um PDF primeiro."; return; }
+
+  status.textContent = "Processando... isso pode levar alguns segundos.";
+  const formData = new FormData();
+  formData.append("pdf", input.files[0]);
+
+  try {
+    const resp = await fetch("/api/extrair", { method: "POST", body: formData });
+    const data = await resp.json();
+    if (data.erro) { status.textContent = "Erro: " + data.erro; return; }
+
+    produtosExtraidos = data.produtos;
+    status.textContent = `Extração concluída: ${data.total} produtos encontrados.`;
+    renderizarProdutos(produtosExtraidos);
+    document.getElementById("cardResultadoExtracao").style.display = "block";
+    document.getElementById("cardPedido").style.display = "block";
+    document.getElementById("cardComparacao").style.display = "block";
+    document.getElementById("cardCusto").style.display = "block";
+  } catch (e) {
+    status.textContent = "Erro na requisição: " + e;
+  }
+});
+
+function renderizarProdutos(produtos) {
+  document.getElementById("totalProdutos").textContent = produtos.length;
+  const tbody = document.querySelector("#tabelaProdutos tbody");
+  tbody.innerHTML = "";
+  for (const p of produtos) {
+    const incompleto = p.preco === null || p.pcs_cx === null;
+    const tr = document.createElement("tr");
+    if (incompleto) tr.classList.add("aviso");
+    tr.innerHTML = `
+      <td>${p.pagina}</td>
+      <td>${p.codigo || ""}</td>
+      <td>${p.nome || ""}</td>
+      <td>${p.pcs_cx ?? "-"}</td>
+      <td>${p.preco !== null ? "R$ " + p.preco.toFixed(2) : "-"}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+document.getElementById("btnConverterPedido").addEventListener("click", async () => {
+  const textarea = document.getElementById("pedidoInput");
+  const status = document.getElementById("statusPedido");
+  const wrap = document.getElementById("resultadoPedidoWrap");
+
+  if (!produtosExtraidos.length) { status.textContent = "Extraia o catálogo primeiro (passo 1)."; return; }
+  if (!textarea.value.trim()) { status.textContent = "Cole o pedido no campo acima."; return; }
+
+  status.textContent = "Convertendo...";
+
+  try {
+    const resp = await fetch("/api/pedido", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ produtos: produtosExtraidos, pedido_texto: textarea.value }),
+    });
+    const data = await resp.json();
+    if (data.erro) { status.textContent = "Erro: " + data.erro; return; }
+
+    const totalLinhas = data.encontrados.length + data.aproximados.length + data.nao_encontrados.length + data.formato_invalido.length;
+    status.textContent = `Concluído: ${data.encontrados.length} encontrado(s), ${data.aproximados.length} aproximado(s), ${data.nao_encontrados.length} não encontrado(s) — de ${totalLinhas} linha(s).`;
+
+    document.getElementById("pedidoOutput").value = data.encontrados.map(i => i.linha_saida).join("\n");
+
+    const aproxWrap = document.getElementById("pedidoAproximadosWrap");
+    if (data.aproximados.length) {
+      document.getElementById("pedidoOutputAproximado").value = data.aproximados.map(i => i.linha_saida).join("\n");
+      const tbody = document.querySelector("#tabelaAproximados tbody");
+      tbody.innerHTML = "";
+      for (const a of data.aproximados) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${a.sku_pedido}</td><td>${a.codigo_catalogo}</td><td>${a.nome || ""}</td>`;
+        tbody.appendChild(tr);
+      }
+      aproxWrap.style.display = "block";
+    } else {
+      aproxWrap.style.display = "none";
+    }
+
+    const naoEncWrap = document.getElementById("pedidoNaoEncontradosWrap");
+    if (data.nao_encontrados.length) {
+      document.getElementById("pedidoOutputNaoEncontrado").value = data.nao_encontrados.join("\n");
+      naoEncWrap.style.display = "block";
+    } else {
+      naoEncWrap.style.display = "none";
+    }
+
+    const invalidoWrap = document.getElementById("pedidoInvalidoWrap");
+    if (data.formato_invalido.length) {
+      document.getElementById("pedidoOutputInvalido").value = data.formato_invalido.join("\n");
+      invalidoWrap.style.display = "block";
+    } else {
+      invalidoWrap.style.display = "none";
+    }
+
+    wrap.style.display = "block";
+  } catch (e) {
+    status.textContent = "Erro na requisição: " + e;
+  }
+});
+
+document.getElementById("btnCopiarPedido").addEventListener("click", () => {
+  const output = document.getElementById("pedidoOutput");
+  output.select();
+  navigator.clipboard.writeText(output.value);
+});
+
+document.getElementById("btnDownloadPedido").addEventListener("click", () => {
+  const texto = document.getElementById("pedidoOutput").value;
+  if (!texto) return;
+  const blob = new Blob([texto], { type: "text/plain;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "pedido_em_caixas.txt";
+  a.click();
+});
+
+document.getElementById("btnComparar").addEventListener("click", async () => {
+  const input = document.getElementById("planilhaInput");
+  const status = document.getElementById("statusComparar");
+  if (!input.files.length) { status.textContent = "Selecione uma planilha primeiro."; return; }
+  if (!produtosExtraidos.length) { status.textContent = "Extraia o catálogo primeiro."; return; }
+
+  status.textContent = "Comparando...";
+  const formData = new FormData();
+  formData.append("planilha", input.files[0]);
+  formData.append("produtos", JSON.stringify(produtosExtraidos));
+
+  try {
+    const resp = await fetch("/api/comparar", { method: "POST", body: formData });
+    const data = await resp.json();
+    if (data.erro) { status.textContent = "Erro: " + data.erro; return; }
+
+    resultadoComparacao = data.resultado;
+    status.textContent = `Comparação concluída: ${data.resultado.length} linhas.`;
+    renderizarComparacao(resultadoComparacao);
+    document.getElementById("cardResultadoComparacao").style.display = "block";
+  } catch (e) {
+    status.textContent = "Erro na requisição: " + e;
+  }
+});
+
+function renderizarComparacao(linhas) {
+  const tbody = document.querySelector("#tabelaComparacao tbody");
+  tbody.innerHTML = "";
+  for (const l of linhas) {
+    const tr = document.createElement("tr");
+    if (!l.encontrado) {
+      tr.innerHTML = `<td>${l.codigo_planilha}</td><td class="erro">NÃO ENCONTRADO NO CATÁLOGO</td>` + "<td>-</td>".repeat(7);
+      tbody.appendChild(tr);
+      continue;
+    }
+    const diffClasse = l.preco_bate === true ? "ok" : (l.preco_bate === false ? "erro" : "muted");
+    const diffTexto = l.diferenca_preco !== null ? (l.diferenca_preco > 0 ? "+" : "") + l.diferenca_preco.toFixed(2) : "-";
+    tr.innerHTML = `
+      <td>${l.codigo_catalogo}</td>
+      <td>${l.nome || ""}</td>
+      <td>${l.preco_planilha !== null ? "R$ " + l.preco_planilha.toFixed(2) : "-"}</td>
+      <td>${l.preco_catalogo !== null ? "R$ " + l.preco_catalogo.toFixed(2) : "-"}</td>
+      <td class="${diffClasse}">${diffTexto}</td>
+      <td>${l.pcs_cx ?? "-"}</td>
+      <td>${l.quantidade_unidades ?? "-"}</td>
+      <td>${l.caixas_fechadas ?? "-"}</td>
+      <td>${l.unidades_restantes ?? "-"}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+document.getElementById("btnDownloadCsv").addEventListener("click", () => {
+  if (!resultadoComparacao.length) return;
+  const colunas = ["codigo_catalogo","nome","preco_planilha","preco_catalogo","diferenca_preco","preco_bate","pcs_cx","quantidade_unidades","caixas_fechadas","unidades_restantes","encontrado"];
+  let csv = colunas.join(";") + "\n";
+  for (const l of resultadoComparacao) {
+    csv += colunas.map(c => (l[c] ?? "")).join(";") + "\n";
+  }
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "comparacao_catalogo.csv";
+  a.click();
+});
+
+let resultadoCusto = [];
+
+document.getElementById("btnCompararCusto").addEventListener("click", async () => {
+  const status = document.getElementById("statusCusto");
+  const sheetUrl = document.getElementById("custoSheetUrl").value.trim();
+  const arquivoInput = document.getElementById("custoPlanilhaInput");
+  const descontoPct = parseFloat(document.getElementById("custoDesconto").value) || 0;
+  const toleranciaPct = parseFloat(document.getElementById("custoTolerancia").value) || 0;
+
+  if (!produtosExtraidos.length) { status.textContent = "Extraia o catálogo primeiro (passo 1)."; return; }
+  if (!sheetUrl && !arquivoInput.files.length) { status.textContent = "Informe o link do Google Sheets ou envie um arquivo."; return; }
+
+  status.textContent = "Verificando custos...";
+  const formData = new FormData();
+  formData.append("produtos", JSON.stringify(produtosExtraidos));
+  formData.append("desconto", descontoPct / 100);
+  formData.append("tolerancia", toleranciaPct / 100);
+  if (arquivoInput.files.length) {
+    formData.append("planilha", arquivoInput.files[0]);
+  } else {
+    formData.append("sheet_url", sheetUrl);
+  }
+
+  try {
+    const resp = await fetch("/api/comparar_custo", { method: "POST", body: formData });
+    const data = await resp.json();
+    if (data.erro) { status.textContent = "Erro: " + data.erro; return; }
+
+    resultadoCusto = data.resultado;
+    const encontrados = resultadoCusto.filter(r => r.encontrado_na_planilha);
+    const bateram = encontrados.filter(r => r.bate);
+    status.textContent = `Verificação concluída: ${encontrados.length} produto(s) localizado(s) na base de custo, ${bateram.length} dentro da tolerância.`;
+    renderizarCusto(resultadoCusto);
+    document.getElementById("cardResultadoCusto").style.display = "block";
+  } catch (e) {
+    status.textContent = "Erro na requisição: " + e;
+  }
+});
+
+function renderizarCusto(linhas) {
+  const tbody = document.querySelector("#tabelaCusto tbody");
+  tbody.innerHTML = "";
+  for (const l of linhas) {
+    const tr = document.createElement("tr");
+    if (!l.encontrado_na_planilha) {
+      tr.innerHTML = `
+        <td>${l.codigo}</td><td>${l.nome || ""}</td>
+        <td>R$ ${l.preco_catalogo.toFixed(2)}</td>
+        <td>R$ ${l.custo_esperado.toFixed(2)}</td>
+        <td class="muted">não encontrado</td>
+        <td>-</td><td>-</td><td class="muted">-</td>
+      `;
+      tbody.appendChild(tr);
+      continue;
+    }
+    const classe = l.bate ? "ok" : "erro";
+    tr.innerHTML = `
+      <td>${l.codigo}</td><td>${l.nome || ""}</td>
+      <td>R$ ${l.preco_catalogo.toFixed(2)}</td>
+      <td>R$ ${l.custo_esperado.toFixed(2)}</td>
+      <td>R$ ${l.custo_planilha.toFixed(2)}</td>
+      <td class="${classe}">${l.diferenca > 0 ? "+" : ""}${l.diferenca.toFixed(2)}</td>
+      <td class="${classe}">${l.diferenca_percentual > 0 ? "+" : ""}${l.diferenca_percentual.toFixed(2)}%</td>
+      <td class="${classe}">${l.bate ? "✔ Bate" : "✘ Não bate"}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+document.getElementById("btnDownloadCustoCsv").addEventListener("click", () => {
+  if (!resultadoCusto.length) return;
+  const colunas = ["codigo","nome","preco_catalogo","custo_esperado","custo_planilha","diferenca","diferenca_percentual","bate","encontrado_na_planilha"];
+  let csv = colunas.join(";") + "\n";
+  for (const l of resultadoCusto) {
+    csv += colunas.map(c => (l[c] ?? "")).join(";") + "\n";
+  }
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "verificacao_custo.csv";
+  a.click();
+});
+</script>
+
+</body>
+</html>
